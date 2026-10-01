@@ -1,0 +1,38 @@
+# Reproduction order
+
+The experiment scripts are numbered in the intended execution order.
+
+1. `scripts/01_prepare_cross_sensor_hr_guide.py`
+   - matches the Sony and Mjolnir plots by geographic center
+   - creates the common 10 x 10 / 1000 x 1000 field guide
+   - writes the plot-stack manifest used later
+
+2. `scripts/02_cross_sensor_gram_sr_rgb_nir.py`
+   - main RGB + 802 nm registration-free abundance-Gram reconstruction
+
+3. `scripts/03_cross_sensor_gram_sr_rgb_only.py`
+   - RGB-only comparison
+
+4. `scripts/04a–04d_*`
+   - RGB-resolution ablation (`x2`, `x4`, `x8`)
+
+5. `scripts/05_analyze_rgb_resolution_ablation.py`
+   - summarizes resolution-ablation results
+
+6. `scripts/06_prepare_downstream_sections_40band.py`
+   - extracts matched genuine and reconstructed 40-band sections
+
+7. `scripts/07_restrans21_40band_5fold.py`
+   - historical ResTrans21 architecture with input channels adapted from 200 to 40
+   - standard 5-fold GroupKFold by parent plot
+   - four folds train, one held out
+   - fixed 150 epochs
+   - model trained only on genuine HSI
+   - frozen evaluation on genuine / RGB-only / RGB+802
+
+8. `scripts/08_plot_manuscript_figures.py`
+   - regenerates the manuscript figures from experiment outputs / included final CSV summaries
+
+## Final downstream protocol
+
+The repository intentionally includes only the final manuscript protocol, not the earlier model-selection/development variants. Those exploratory scripts were useful during development but are not required to reproduce the reported main experiment.
