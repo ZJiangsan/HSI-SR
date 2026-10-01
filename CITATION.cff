@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the associated manuscript when available."
+title: "HSI-SR: Registration-Free Cross-Sensor Hyperspectral Super-Resolution"
+type: software
+authors:
+  - family-names: Zhao
+    given-names: Jiangsan
+    email: jiangsan.zhao@nibio.no
+  - family-names: Kusnierek
+    given-names: Krzysztof
+  - family-names: Geipel
+    given-names: Jakob
+repository-code: "https://github.com/ZJiangsan/HSI-SR"
+date-released: 2026-10-01
+license: "NOASSERTION"
