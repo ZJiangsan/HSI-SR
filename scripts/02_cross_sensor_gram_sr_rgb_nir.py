@@ -82,7 +82,7 @@ DECODER_CHECKPOINT_NAME = (
 OUTPUT_ROOT = (
     ROOT
     / "hyspex_mjolnir1024"
-    / "sony_rgb_plus_801_cross_sensor_gram_seed0_v2"
+    / "sony_rgb_plus_801_cross_sensor_gram_seed0"
 )
 OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 
@@ -157,16 +157,22 @@ class DecoderHSI(nn.Module):
 
 class InputToHSIMapper(nn.Module):
     """
-    Original residual mapper semantics.
+    Residual 4->40 mapper used for the final RGB+802 experiment.
 
-    n=4:
-        learned 4->40 linear correction
-        +
-        deterministic repeat residual [10,10,10,10]
+    The guide HDF5 stores channels as [Sony_R, Sony_G, Sony_B, Mjolnir_NIR].
+    Before both the learned branch and deterministic repeat residual, the
+    mapper reorders them to wavelength-oriented [B, G, R, NIR]. This ordering
+    is required by the residual spectral initialization used for the reported
+    final reconstruction.
     """
 
     def __init__(self, n_inputs=4, n_outputs=40):
         super().__init__()
+
+        if n_inputs != 4 or n_outputs != 40:
+            raise ValueError(
+                "The final reported cross-sensor mapper expects 4 inputs and 40 outputs."
+            )
 
         self.n_inputs = int(n_inputs)
         self.n_outputs = int(n_outputs)
@@ -177,29 +183,38 @@ class InputToHSIMapper(nn.Module):
             bias=False,
         )
 
-        base = self.n_outputs // self.n_inputs
-        counts = [base] * self.n_inputs
-        counts[-1] += self.n_outputs - sum(counts)
-
         self.register_buffer(
             "repeat_counts",
             torch.tensor(
-                counts,
+                [10, 10, 10, 10],
+                dtype=torch.long,
+            ),
+        )
+
+        self.register_buffer(
+            "channel_order",
+            torch.tensor(
+                [2, 1, 0, 3],
                 dtype=torch.long,
             ),
         )
 
     def forward(self, x):
-        learned = self.conv11(x)
+        x_ordered = torch.index_select(
+            x,
+            dim=1,
+            index=self.channel_order,
+        )
+
+        learned = self.conv11(x_ordered)
 
         residual = torch.repeat_interleave(
-            x,
+            x_ordered,
             self.repeat_counts,
             dim=1,
         )
 
         return learned + residual
-
 
 def get_stick_segments(v):
     one_minus = 1.0 - v
@@ -1181,10 +1196,16 @@ for epoch in range(
                 "state_dict": mapper.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "n_inputs": 4,
-                "guide_channels": [
+                "guide_channels_stored": [
                     "Sony_R",
                     "Sony_G",
                     "Sony_B",
+                    "Mjolnir_NIR",
+                ],
+                "guide_channels_mapper_order": [
+                    "Sony_B",
+                    "Sony_G",
+                    "Sony_R",
                     "Mjolnir_NIR",
                 ],
                 "guide_nir_actual_nm": guide_nir_actual_nm,
