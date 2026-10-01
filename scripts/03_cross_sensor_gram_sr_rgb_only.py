@@ -1018,3 +1018,590 @@ for epoch in range(
             )
 
             ref_norm = torch.linalg.vector_norm(
+                recon_window_reference
+            ).clamp_min(
+                1e-12
+            )
+
+            recon_relative_change = float(
+                (
+                    diff_norm
+                    / ref_norm
+                ).item()
+            )
+
+            if (
+                epoch
+                >= RECON_EARLY_STOP_MIN_EPOCH
+                and recon_relative_change
+                < RECON_REL_CHANGE_THRESHOLD
+            ):
+                recon_stable_windows += 1
+            else:
+                recon_stable_windows = 0
+
+            print(
+                "[recon-window] {} -> {} | "
+                "change={:.3e} | stable={}/{}".format(
+                    recon_window_reference_epoch,
+                    epoch,
+                    recon_relative_change,
+                    recon_stable_windows,
+                    RECON_STABLE_WINDOWS,
+                )
+            )
+
+            recon_window_reference = (
+                current_reconstruction_eval
+            )
+
+            recon_window_reference_epoch = epoch
+
+            if (
+                epoch
+                >= RECON_EARLY_STOP_MIN_EPOCH
+                and recon_stable_windows
+                >= RECON_STABLE_WINDOWS
+            ):
+                recon_change_stop = True
+
+        with torch.no_grad():
+            reconstruction_hr_mean = (
+                reconstructed_centered
+                + gt_mean_gpu
+            )
+
+            reconstruction_np = (
+                reconstruction_hr_mean
+                .detach()
+                .cpu()
+                .numpy()
+                .reshape(
+                    1000,
+                    1000,
+                    40,
+                )
+                .astype(
+                    np.float32
+                )
+            )
+
+        metrics_full = evaluate_numpy(
+            img_hr_hsi,
+            reconstruction_np,
+            mask=valid_mask_hr > 0,
+        )
+
+        metrics_plot = evaluate_numpy(
+            img_hr_hsi,
+            reconstruction_np,
+            mask=(
+                (plot_mask_hr > 0)
+                & (valid_mask_hr > 0)
+            ),
+        )
+
+        if (
+            metrics_full["SAM"]
+            < diagnostic_best_full_sam
+        ):
+            diagnostic_best_full_sam = (
+                metrics_full["SAM"]
+            )
+            diagnostic_best_full_sam_epoch = epoch
+
+        if (
+            metrics_plot["SAM"]
+            < diagnostic_best_plot_sam
+        ):
+            diagnostic_best_plot_sam = (
+                metrics_plot["SAM"]
+            )
+            diagnostic_best_plot_sam_epoch = epoch
+
+        diagnostic_path.write_text(
+            json.dumps(
+                {
+                    "IMPORTANT": (
+                        "Diagnostic only. "
+                        "These HR-GT minima were NOT used for model selection."
+                    ),
+                    "best_full_sam": diagnostic_best_full_sam,
+                    "best_full_sam_epoch": diagnostic_best_full_sam_epoch,
+                    "best_plot_sam": diagnostic_best_plot_sam,
+                    "best_plot_sam_epoch": diagnostic_best_plot_sam_epoch,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        row = {
+            "epoch": epoch,
+            "total_loss": loss_value,
+            "gram_sam": gram_sam_value,
+            "gram_psnr": gram_psnr_value,
+            "best_loss": best_loss,
+            "best_epoch": saved_epoch,
+
+            "recon_SAM_full": metrics_full["SAM"],
+            "recon_PSNR_full": metrics_full["PSNR"],
+            "recon_ERGAS_full": metrics_full["ERGAS"],
+            "recon_RMSE_full": metrics_full["RMSE"],
+            "recon_MAE_full": metrics_full["MAE"],
+
+            "recon_SAM_plot": metrics_plot["SAM"],
+            "recon_PSNR_plot": metrics_plot["PSNR"],
+            "recon_ERGAS_plot": metrics_plot["ERGAS"],
+            "recon_RMSE_plot": metrics_plot["RMSE"],
+            "recon_MAE_plot": metrics_plot["MAE"],
+
+            "diagnostic_best_full_sam": diagnostic_best_full_sam,
+            "diagnostic_best_full_sam_epoch": diagnostic_best_full_sam_epoch,
+            "diagnostic_best_plot_sam": diagnostic_best_plot_sam,
+            "diagnostic_best_plot_sam_epoch": diagnostic_best_plot_sam_epoch,
+
+            "recon_relative_change": recon_relative_change,
+            "recon_stable_windows": recon_stable_windows,
+
+            "reconstruction_l21": float(
+                loss_parts[
+                    "reconstruction_l21"
+                ]
+                .detach()
+                .item()
+            ),
+
+            "gram_l21": float(
+                loss_parts[
+                    "gram_l21"
+                ]
+                .detach()
+                .item()
+            ),
+
+            "gram_ergas": float(
+                loss_parts[
+                    "gram_ergas"
+                ]
+                .detach()
+                .item()
+            ),
+
+            "gram_sam_loss": float(
+                loss_parts[
+                    "gram_sam"
+                ]
+                .detach()
+                .item()
+            ),
+
+            "gram_sam_t": float(
+                loss_parts[
+                    "gram_sam_t"
+                ]
+                .detach()
+                .item()
+            ),
+
+            "diag_l21": float(
+                loss_parts[
+                    "diag_l21"
+                ]
+                .detach()
+                .item()
+            ),
+
+            "diag_sam": float(
+                loss_parts[
+                    "diag_sam"
+                ]
+                .detach()
+                .item()
+            ),
+
+            "seconds": (
+                time.time()
+                - run_start_time
+            ),
+        }
+
+        write_header = (
+            not history_path.exists()
+        )
+
+        with open(
+            history_path,
+            "a",
+            newline="",
+            encoding="utf-8",
+        ) as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=history_fields,
+            )
+
+            if write_header:
+                writer.writeheader()
+
+            writer.writerow(row)
+
+        print(
+            "E{:07d} | "
+            "loss={:.6f} | "
+            "GramSAM={:.5f} | "
+            "best={:.6f}@{} | "
+            "FULL SAM={:.4f} PSNR={:.3f} | "
+            "PLOT SAM={:.4f} PSNR={:.3f} | "
+            "diag-best-full={:.4f}@{} | "
+            "diag-best-plot={:.4f}@{}".format(
+                epoch,
+                loss_value,
+                gram_sam_value,
+                best_loss,
+                saved_epoch,
+                metrics_full["SAM"],
+                metrics_full["PSNR"],
+                metrics_plot["SAM"],
+                metrics_plot["PSNR"],
+                diagnostic_best_full_sam,
+                diagnostic_best_full_sam_epoch,
+                diagnostic_best_plot_sam,
+                diagnostic_best_plot_sam_epoch,
+            )
+        )
+
+        if recon_change_stop:
+            print(
+                "\n[early-stop] "
+                "Predicted HSI stabilized under the unsupervised LR-mean criterion."
+            )
+            break
+
+    loss.backward()
+
+    if GRAD_CLIP > 0:
+        torch.nn.utils.clip_grad_norm_(
+            mapper.parameters(),
+            GRAD_CLIP,
+        )
+
+    optimizer.step()
+
+    if (
+        SAVE_LATEST_EVERY > 0
+        and (
+            epoch + 1
+        )
+        % SAVE_LATEST_EVERY
+        == 0
+    ):
+        atomic_torch_save(
+            {
+                "epoch": epoch,
+                "best_loss": best_loss,
+                "saved_gram_sam": saved_gram_sam,
+                "saved_gram_psnr": saved_gram_psnr,
+                "saved_epoch": saved_epoch,
+                "plateau_gram_sam": plateau_gram_sam,
+                "plateau_epoch": plateau_epoch,
+                "diagnostic_best_full_sam": diagnostic_best_full_sam,
+                "diagnostic_best_full_sam_epoch": diagnostic_best_full_sam_epoch,
+                "diagnostic_best_plot_sam": diagnostic_best_plot_sam,
+                "diagnostic_best_plot_sam_epoch": diagnostic_best_plot_sam_epoch,
+                "state_dict": mapper.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "n_inputs": 3,
+                "guide_channels_stored": ["Sony_R", "Sony_G", "Sony_B"],
+                "guide_channels_mapper_order": ["Sony_B", "Sony_G", "Sony_R"],
+                "seed": SEED,
+                "global_whole_image_training": True,
+            },
+            latest_path,
+        )
+
+    if (
+        SAM_PATIENCE_EPOCHS > 0
+        and (
+            epoch
+            - plateau_epoch
+        )
+        >= SAM_PATIENCE_EPOCHS
+    ):
+        print(
+            "\n[early-stop] "
+            "Centered abundance Gram-SAM plateau."
+        )
+        break
+
+
+atomic_torch_save(
+    {
+        "epoch": last_epoch,
+        "best_loss": best_loss,
+        "saved_gram_sam": saved_gram_sam,
+        "saved_gram_psnr": saved_gram_psnr,
+        "saved_epoch": saved_epoch,
+        "plateau_gram_sam": plateau_gram_sam,
+        "plateau_epoch": plateau_epoch,
+        "diagnostic_best_full_sam": diagnostic_best_full_sam,
+        "diagnostic_best_full_sam_epoch": diagnostic_best_full_sam_epoch,
+        "diagnostic_best_plot_sam": diagnostic_best_plot_sam,
+        "diagnostic_best_plot_sam_epoch": diagnostic_best_plot_sam_epoch,
+        "state_dict": mapper.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "n_inputs": 3,
+        "guide_channels_stored": ["Sony_R", "Sony_G", "Sony_B"],
+        "guide_channels_mapper_order": ["Sony_B", "Sony_G", "Sony_R"],
+        "seed": SEED,
+        "global_whole_image_training": True,
+    },
+    latest_path,
+)
+
+
+best_payload = torch.load(
+    best_path,
+    map_location=device,
+)
+
+mapper.load_state_dict(
+    best_payload["state_dict"]
+)
+
+mapper.eval()
+
+
+with torch.no_grad():
+    mapped_best = mapper(
+        input_hr_guide_var
+    ).clamp(
+        -1.0 + 1e-8,
+        1.0 - 1e-8,
+    )
+
+    abundance_best = get_stick_segments(
+        encoder(mapped_best)
+    ).clamp(
+        1e-8,
+        1.0 - 1e-8,
+    )
+
+    reconstruction_centered_best = decoder(
+        abundance_best
+    ).clamp(
+        -1.0 + 1e-8,
+        1.0 - 1e-8,
+    )
+
+    reconstruction_lr_mean = (
+        reconstruction_centered_best
+        + input_lr_hsi_raw_mean.to(
+            device
+        )
+    )
+
+    reconstruction_lr_mean_np = (
+        reconstruction_lr_mean
+        .detach()
+        .cpu()
+        .numpy()
+        .reshape(
+            1000,
+            1000,
+            40,
+        )
+        .astype(
+            np.float32
+        )
+    )
+
+    reconstruction_hr_mean = (
+        reconstruction_centered_best
+        + gt_mean_gpu
+    )
+
+    reconstruction_hr_mean_np = (
+        reconstruction_hr_mean
+        .detach()
+        .cpu()
+        .numpy()
+        .reshape(
+            1000,
+            1000,
+            40,
+        )
+        .astype(
+            np.float32
+        )
+    )
+
+
+metrics_full = evaluate_numpy(
+    img_hr_hsi,
+    reconstruction_hr_mean_np,
+    mask=valid_mask_hr > 0,
+)
+
+metrics_plot = evaluate_numpy(
+    img_hr_hsi,
+    reconstruction_hr_mean_np,
+    mask=(
+        (plot_mask_hr > 0)
+        & (valid_mask_hr > 0)
+    ),
+)
+
+
+if SAVE_RECONSTRUCTION:
+    with h5py.File(
+        reconstruction_path,
+        "w",
+    ) as f:
+        f.create_dataset(
+            "reconstruction_official_lr_mean",
+            data=reconstruction_lr_mean_np,
+            compression="gzip",
+            compression_opts=4,
+        )
+
+        f.create_dataset(
+            "reconstruction_diagnostic_hr_mean",
+            data=reconstruction_hr_mean_np,
+            compression="gzip",
+            compression_opts=4,
+        )
+
+        f.create_dataset(
+            "wavelengths_nm",
+            data=wavelengths,
+        )
+
+        f.create_dataset(
+            "hr_guide",
+            data=img_hr_guide,
+            compression="gzip",
+            compression_opts=4,
+        )
+
+        f.attrs["official_checkpoint"] = (
+            "minimum_original_composite_loss"
+        )
+
+        f.attrs["HR_GT_used_for_training"] = False
+        f.attrs["HR_GT_used_for_checkpoint_selection"] = False
+        f.attrs["HR_GT_used_for_stopping"] = False
+        f.attrs["global_whole_image_training"] = True
+        f.attrs["plot_by_plot_training"] = False
+        f.attrs["guide_type"] = "Sony RGB only"
+        f.attrs["guide_channels_stored"] = "R,G,B"
+        f.attrs["guide_channels_mapper_order"] = "B,G,R"
+        f.attrs["best_epoch"] = int(best_payload["epoch"])
+        f.attrs["best_loss"] = float(best_payload["best_loss"])
+
+
+result = {
+    "status": "complete",
+    "experiment": "cross_sensor_sony_bgr_only_global_gram_hsi_sr",
+    "hr_guide": "Sony_RGB_only",
+    "guide_channels_stored": ["Sony_R", "Sony_G", "Sony_B"],
+    "guide_channels_mapper_order": ["Sony_B", "Sony_G", "Sony_R"],
+    "n_hr_guide_channels": 3,
+    "scale_factor": 8,
+    "hr_shape": list(img_hr_hsi.shape),
+    "lr_shape": list(img_lr_hsi.shape),
+    "best_epoch_unsupervised": int(best_payload["epoch"]),
+    "best_composite_loss": float(best_payload["best_loss"]),
+    "HR_GT_used_for_training": False,
+    "HR_GT_used_for_checkpoint_selection": False,
+    "HR_GT_used_for_stopping": False,
+    "global_whole_image_training": True,
+    "plot_by_plot_training": False,
+
+    "diagnostic_best_full_sam_during_training": {
+        "SAM": diagnostic_best_full_sam,
+        "epoch": diagnostic_best_full_sam_epoch,
+        "used_for_selection": False,
+    },
+
+    "diagnostic_best_plot_sam_during_training": {
+        "SAM": diagnostic_best_plot_sam,
+        "epoch": diagnostic_best_plot_sam_epoch,
+        "used_for_selection": False,
+    },
+
+    "official_checkpoint_diagnostic_full": {
+        "SAM": metrics_full["SAM"],
+        "PSNR": metrics_full["PSNR"],
+        "ERGAS": metrics_full["ERGAS"],
+        "RMSE": metrics_full["RMSE"],
+        "MAE": metrics_full["MAE"],
+    },
+
+    "official_checkpoint_diagnostic_plot": {
+        "SAM": metrics_plot["SAM"],
+        "PSNR": metrics_plot["PSNR"],
+        "ERGAS": metrics_plot["ERGAS"],
+        "RMSE": metrics_plot["RMSE"],
+        "MAE": metrics_plot["MAE"],
+    },
+
+    "official_reconstruction_dataset": (
+        "reconstruction_official_lr_mean"
+    ),
+}
+
+result_path.write_text(
+    json.dumps(
+        result,
+        indent=2,
+    ),
+    encoding="utf-8",
+)
+
+
+print("\n" + "=" * 100)
+print("CROSS-SENSOR SONY BGR-ONLY GLOBAL GRAM HSI-SR COMPLETE")
+print("=" * 100)
+
+print("Official unsupervised checkpoint epoch:", best_payload["epoch"])
+print("Official minimum composite loss:", best_payload["best_loss"])
+
+print(
+    "Diagnostic best FULL SAM during training:",
+    diagnostic_best_full_sam,
+    "@",
+    diagnostic_best_full_sam_epoch,
+)
+
+print(
+    "Diagnostic best PLOT SAM during training:",
+    diagnostic_best_plot_sam,
+    "@",
+    diagnostic_best_plot_sam_epoch,
+)
+
+print("\nOfficial checkpoint diagnostic metrics:")
+print(
+    "FULL: SAM={:.4f} PSNR={:.3f} ERGAS={:.4f}".format(
+        metrics_full["SAM"],
+        metrics_full["PSNR"],
+        metrics_full["ERGAS"],
+    )
+)
+
+print(
+    "PLOT: SAM={:.4f} PSNR={:.3f} ERGAS={:.4f}".format(
+        metrics_plot["SAM"],
+        metrics_plot["PSNR"],
+        metrics_plot["ERGAS"],
+    )
+)
+
+print("\nFor downstream DM/NC/NU use:")
+print("  reconstruction_official_lr_mean")
+
+print("\nSaved:")
+print(result_path)
+if SAVE_RECONSTRUCTION:
+    print(reconstruction_path)
