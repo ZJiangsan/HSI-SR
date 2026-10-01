@@ -193,7 +193,7 @@ save("RGB_resolution_ablation")
 
 
 # ---------------------------------------------------------------------------
-# Downstream model transfer
+# Crop-trait prediction transfer
 # ---------------------------------------------------------------------------
 
 fm = pd.read_csv(
