@@ -33,7 +33,7 @@ The reconstruction scripts also reuse the pretrained Mjolnir 40-band encoder/dec
 - RGB guide: independent Sony RGB acquisition
 - NIR anchor: Mjolnir native band near `802.320 nm`
 
-## Downstream dataset
+## Functional-validation dataset
 
 The final crop-trait prediction experiment used:
 
