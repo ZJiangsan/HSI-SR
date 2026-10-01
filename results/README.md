@@ -18,7 +18,7 @@ Ground-truth HR-HSI metrics in these JSON files are **post hoc diagnostics**. Th
 - `visible_nir_summary.csv`
 - `plot_sensor_summary.csv`
 
-## Downstream functional transfer
+## Functional validation of crop-trait prediction
 
 - `fold_metrics.csv`
 - `cross_fold_summary.csv`
