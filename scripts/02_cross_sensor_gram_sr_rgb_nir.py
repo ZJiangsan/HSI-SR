@@ -383,3 +383,379 @@ def compute_original_composite_loss(
 
     style_abundance_loss_sam = sam_ev_gen(
         hr_gram_diagonal,
+        lr_gram_diagonal,
+    )
+
+    loss_de_final_multi = (
+        style_abundance_loss
+        + style_ergas_loss
+        + 10.0 * style_abundance_sam_loss
+        + style_abundance_sam_loss_t
+    )
+
+    loss_de_final_new = (
+        style_abundance_loss_abs
+        + 10.0 * style_abundance_loss_sam
+    )
+
+    loss_de_final = (
+        0.1 * loss_de_msi
+        + 10.0 * loss_de_final_new
+        + 100.0 * loss_de_final_multi
+    )
+
+    parts = {
+        "reconstruction_l21": loss_de_msi,
+        "gram_l21": style_abundance_loss,
+        "gram_ergas": style_ergas_loss,
+        "gram_sam": style_abundance_sam_loss,
+        "gram_sam_t": style_abundance_sam_loss_t,
+        "diag_l21": style_abundance_loss_abs,
+        "diag_sam": style_abundance_loss_sam,
+    }
+
+    return loss_de_final, parts
+
+
+def evaluate_numpy(
+    gt_hwc,
+    pred_hwc,
+    mask=None,
+):
+    gt = np.asarray(
+        gt_hwc,
+        dtype=np.float64,
+    ).reshape(
+        -1,
+        gt_hwc.shape[-1],
+    )
+
+    pred = np.asarray(
+        pred_hwc,
+        dtype=np.float64,
+    ).reshape(
+        -1,
+        pred_hwc.shape[-1],
+    )
+
+    if mask is not None:
+        mask_flat = np.asarray(
+            mask,
+            dtype=bool,
+        ).reshape(-1)
+
+        gt = gt[mask_flat]
+        pred = pred[mask_flat]
+
+    eps = 1e-8
+
+    numerator = (
+        gt * pred
+    ).sum(1)
+
+    denominator = (
+        np.sqrt(
+            (gt ** 2).sum(1)
+        )
+        * np.sqrt(
+            (pred ** 2).sum(1)
+        )
+        + eps
+    )
+
+    sam = float(
+        np.degrees(
+            np.arccos(
+                np.clip(
+                    numerator / denominator,
+                    -1.0,
+                    1.0,
+                )
+            )
+        ).mean()
+    )
+
+    mse_per_pixel = (
+        (gt - pred) ** 2
+    ).mean(1)
+
+    max2 = (
+        gt ** 2
+    ).max()
+
+    psnr = float(
+        (
+            10.0
+            * np.log10(
+                max2
+                / (
+                    mse_per_pixel
+                    + eps
+                )
+            )
+        ).mean()
+    )
+
+    rmse_band = np.sqrt(
+        (
+            (gt - pred) ** 2
+        ).mean(0)
+    )
+
+    mean_band = (
+        np.abs(
+            gt.mean(0)
+        )
+        + eps
+    )
+
+    ergas = float(
+        100.0
+        * np.sqrt(
+            np.mean(
+                (
+                    rmse_band
+                    / mean_band
+                )
+                ** 2
+            )
+        )
+    )
+
+    return {
+        "SAM": sam,
+        "PSNR": psnr,
+        "ERGAS": ergas,
+        "RMSE": float(
+            np.sqrt(
+                (
+                    (gt - pred) ** 2
+                ).mean()
+            )
+        ),
+        "MAE": float(
+            np.abs(
+                gt - pred
+            ).mean()
+        ),
+        "rmse_band": rmse_band,
+    }
+
+
+def resolve_checkpoint(checkpoint_name):
+    search_dirs = [
+        Path.cwd(),
+        Path.home(),
+        ROOT,
+        ROOT / "hyspex_mjolnir1024",
+    ]
+
+    exact_candidates = []
+
+    for folder in search_dirs:
+        p = folder / checkpoint_name
+
+        if p.exists():
+            exact_candidates.append(
+                p.resolve()
+            )
+
+    exact_candidates = list(
+        dict.fromkeys(
+            exact_candidates
+        )
+    )
+
+    if len(exact_candidates) == 1:
+        return exact_candidates[0]
+
+    if len(exact_candidates) > 1:
+        print(
+            "[checkpoint] multiple exact copies; using:",
+            exact_candidates[0],
+        )
+        return exact_candidates[0]
+
+    found = []
+
+    for folder in search_dirs:
+        if folder.exists():
+            found.extend(
+                folder.glob(
+                    "**/" + checkpoint_name
+                )
+            )
+
+    found = sorted(
+        set(
+            p.resolve()
+            for p in found
+        )
+    )
+
+    if len(found) == 1:
+        return found[0]
+
+    raise FileNotFoundError(
+        "\nCould not uniquely resolve checkpoint:\n"
+        + checkpoint_name
+        + "\nCandidates:\n"
+        + "\n".join(
+            str(x)
+            for x in found
+        )
+    )
+
+
+def load_module_checkpoint(
+    module,
+    path,
+    device,
+):
+    checkpoint = torch.load(
+        path,
+        map_location=device,
+    )
+
+    state = checkpoint.get(
+        "state_dict",
+        checkpoint,
+    )
+
+    module.load_state_dict(state)
+
+
+def atomic_torch_save(payload, path):
+    path = Path(path)
+
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    temp = path.with_suffix(
+        path.suffix + ".tmp"
+    )
+
+    torch.save(
+        payload,
+        temp,
+    )
+
+    os.replace(
+        temp,
+        path,
+    )
+
+
+if not MJOLNIR_H5.exists():
+    raise FileNotFoundError(MJOLNIR_H5)
+
+with h5py.File(MJOLNIR_H5, "r") as f:
+    img_hr_hsi = np.float32(
+        f["hsi_hr"][:1000, :1000, :]
+    )
+
+    img_lr_hsi = np.float32(
+        f["hsi_lr"][:]
+    )
+
+    wavelengths = np.float32(
+        f["selected_wavelengths_nm"][:]
+    )
+
+    plot_mask_hr = np.uint8(
+        f["plot_mask_hr"][:1000, :1000]
+    )
+
+    valid_mask_hr = np.uint8(
+        f["valid_mask_hr"][:1000, :1000]
+    )
+
+if img_hr_hsi.shape != (1000, 1000, 40):
+    raise ValueError(
+        f"Expected HR HSI=(1000,1000,40), got {img_hr_hsi.shape}"
+    )
+
+if img_lr_hsi.shape != (125, 125, 40):
+    raise ValueError(
+        f"Expected LR HSI=(125,125,40), got {img_lr_hsi.shape}"
+    )
+
+
+if not GUIDE_H5.exists():
+    raise FileNotFoundError(
+        "Run 01_prepare_cross_sensor_hr_guide.py first:\n"
+        + str(GUIDE_H5)
+    )
+
+with h5py.File(GUIDE_H5, "r") as f:
+    img_hr_guide = np.float32(
+        f["hr_guide"][:]
+    )
+
+    guide_nir_actual_nm = float(
+        f.attrs["nir_actual_nm"]
+    )
+
+if img_hr_guide.shape != (1000, 1000, 4):
+    raise ValueError(
+        f"Expected HR guide=(1000,1000,4), got {img_hr_guide.shape}"
+    )
+
+print("=" * 100)
+print("REAL CROSS-SENSOR WHOLE-FIELD GRAM HSI-SR")
+print("=" * 100)
+print("HR guide:", img_hr_guide.shape)
+print("LR HSI  :", img_lr_hsi.shape)
+print("HR HSI  :", img_hr_hsi.shape)
+print("NIR guide wavelength:", guide_nir_actual_nm)
+print("HR pixels used in ONE global mapper/Gram:", 1000 * 1000)
+print("LR pixels used in ONE global Gram:", 125 * 125)
+print("Plot-by-plot training: NO")
+
+
+encoder_checkpoint = resolve_checkpoint(
+    ENCODER_CHECKPOINT_NAME
+)
+
+decoder_checkpoint = resolve_checkpoint(
+    DECODER_CHECKPOINT_NAME
+)
+
+encoder = (
+    EncoderLRHSI()
+    .to(device)
+    .float()
+)
+
+decoder = (
+    DecoderHSI()
+    .to(device)
+    .float()
+)
+
+load_module_checkpoint(
+    encoder,
+    encoder_checkpoint,
+    device,
+)
+
+load_module_checkpoint(
+    decoder,
+    decoder_checkpoint,
+    device,
+)
+
+encoder.eval()
+decoder.eval()
+
+for parameter in encoder.parameters():
+    parameter.requires_grad_(False)
+
+for parameter in decoder.parameters():
+    parameter.requires_grad_(False)
+
+print("Frozen encoder/decoder loaded.")
+
+
