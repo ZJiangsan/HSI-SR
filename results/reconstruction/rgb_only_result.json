@@ -1,0 +1,59 @@
+{
+  "status": "complete",
+  "experiment": "cross_sensor_sony_bgr_only_global_gram_hsi_sr",
+  "hr_guide": "Sony_RGB_only",
+  "guide_channels_stored": [
+    "Sony_R",
+    "Sony_G",
+    "Sony_B"
+  ],
+  "guide_channels_mapper_order": [
+    "Sony_B",
+    "Sony_G",
+    "Sony_R"
+  ],
+  "n_hr_guide_channels": 3,
+  "scale_factor": 8,
+  "hr_shape": [
+    1000,
+    1000,
+    40
+  ],
+  "lr_shape": [
+    125,
+    125,
+    40
+  ],
+  "best_epoch_unsupervised": 46638,
+  "best_composite_loss": 33404.5625,
+  "HR_GT_used_for_training": false,
+  "HR_GT_used_for_checkpoint_selection": false,
+  "HR_GT_used_for_stopping": false,
+  "global_whole_image_training": true,
+  "plot_by_plot_training": false,
+  "diagnostic_best_full_sam_during_training": {
+    "SAM": 3.5254432791508594,
+    "epoch": 5200,
+    "used_for_selection": false
+  },
+  "diagnostic_best_plot_sam_during_training": {
+    "SAM": 3.5069593283791156,
+    "epoch": 5200,
+    "used_for_selection": false
+  },
+  "official_checkpoint_diagnostic_full": {
+    "SAM": 4.997038792427812,
+    "PSNR": 26.28966349202471,
+    "ERGAS": 32.210435815822535,
+    "RMSE": 0.07010110465140826,
+    "MAE": 0.0489847041145585
+  },
+  "official_checkpoint_diagnostic_plot": {
+    "SAM": 4.9844044348507435,
+    "PSNR": 26.30281175177928,
+    "ERGAS": 32.18823716002562,
+    "RMSE": 0.07001140713152619,
+    "MAE": 0.048908141645157686
+  },
+  "official_reconstruction_dataset": "reconstruction_official_lr_mean"
+}
