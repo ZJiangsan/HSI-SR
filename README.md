@@ -1,6 +1,6 @@
 # HSI_SR
 
-## Registration-free cross-sensor hyperspectral super-resolution with downstream functional validation
+## Registration-free cross-sensor hyperspectral super-resolution with functional validation of crop-trait prediction
 
 This repository contains the code and compact result summaries for a field-scale hyperspectral super-resolution study using **independently acquired Sony RGB and HySpex Mjolnir imagery**.
 
@@ -28,7 +28,7 @@ The benefit is not limited to image-reconstruction metrics. A ResTrans21 predict
 | RGB + 802 reconstruction | 0.273 | 0.179 | **0.585** |
 | RGB-only reconstruction | -3.060 | -1.096 | -3.439 |
 
-Thus, the NIR-assisted Gram reconstruction not only reconstructs the spectrum accurately but also preserves substantial downstream predictive information, with nitrogen-uptake performance nearly unchanged.
+Thus, the NIR-assisted Gram reconstruction not only reconstructs the spectrum accurately but also preserves substantial predictive information, with nitrogen-uptake performance nearly unchanged.
 
 ## Repository structure
 
@@ -46,12 +46,12 @@ HSI_SR/
 │   ├── 04_rgb_resolution_ablation.py
 │   ├── 04_run_all_rgb_resolution_ablations.py
 │   ├── 05_analyze_rgb_resolution_ablation.py
-│   ├── 06_prepare_downstream_sections_40band.py
+│   ├── 06_prepare_trait_prediction_sections_40band.py
 │   ├── 07_restrans21_40band_5fold.py
 │   └── 08_plot_manuscript_figures.py
 ├── results/
 │   ├── reconstruction/
-│   ├── downstream/
+│   ├── functional-validation/
 │   └── per_band/
 └── .gitignore
 ```
@@ -74,7 +74,7 @@ Large raw imagery, reconstructed HDF5 cubes, and model checkpoint files are inte
 
 ## Reproduction
 
-See [`REPRODUCE.md`](REPRODUCE.md) for the experiment order and the exact final downstream protocol used in the manuscript.
+See [`REPRODUCE.md`](REPRODUCE.md) for the experiment order and the exact final trait-prediction protocol used in the manuscript.
 
 ## Methodological note
 
