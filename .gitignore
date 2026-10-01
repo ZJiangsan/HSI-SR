@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# Large/raw data and trained models
+*.h5
+*.hdf5
+*.tif
+*.tiff
+*.pth
+*.pt
+*.ckpt
+*.npy
+*.npz
+
+# Local data/output trees
+RGB2msi/
+data/
+checkpoints/
+outputs/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
