@@ -11,7 +11,7 @@ Generated figures:
 - per-band RMSE
 - per-band spatial correlation
 - RGB-resolution ablation
-- downstream R2 with fold standard deviations
+- functional-validation R2 with fold standard deviations
 - fold-wise delta R2
 
 Observed-vs-predicted scatterplots require test_predictions.csv, which is
@@ -197,7 +197,7 @@ save("RGB_resolution_ablation")
 # ---------------------------------------------------------------------------
 
 fm = pd.read_csv(
-    RESULTS / "downstream" / "fold_metrics.csv"
+    RESULTS / "functional_validation" / "fold_metrics.csv"
 )
 
 source_order = ["genuine", "bgr_plus_802", "bgr_only"]
@@ -240,7 +240,7 @@ plt.axhline(0, linewidth=0.8)
 plt.xticks(x, target_labels)
 plt.ylabel(r"$R^2$")
 plt.legend(frameon=False)
-save("downstream_R2")
+save("functional-validation_R2")
 
 
 pivot = fm.pivot_table(
