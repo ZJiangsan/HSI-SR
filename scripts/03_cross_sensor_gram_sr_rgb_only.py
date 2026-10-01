@@ -410,3 +410,611 @@ def atomic_torch_save(payload, path):
     temp = path.with_suffix(path.suffix + ".tmp")
     torch.save(payload, temp)
     os.replace(temp, path)
+if not MJOLNIR_H5.exists():
+    raise FileNotFoundError(MJOLNIR_H5)
+
+with h5py.File(MJOLNIR_H5, "r") as f:
+    img_hr_hsi = np.float32(
+        f["hsi_hr"][:1000, :1000, :]
+    )
+
+    img_lr_hsi = np.float32(
+        f["hsi_lr"][:]
+    )
+
+    wavelengths = np.float32(
+        f["selected_wavelengths_nm"][:]
+    )
+
+    plot_mask_hr = np.uint8(
+        f["plot_mask_hr"][:1000, :1000]
+    )
+
+    valid_mask_hr = np.uint8(
+        f["valid_mask_hr"][:1000, :1000]
+    )
+
+if img_hr_hsi.shape != (1000, 1000, 40):
+    raise ValueError(
+        f"Expected HR HSI=(1000,1000,40), got {img_hr_hsi.shape}"
+    )
+
+if img_lr_hsi.shape != (125, 125, 40):
+    raise ValueError(
+        f"Expected LR HSI=(125,125,40), got {img_lr_hsi.shape}"
+    )
+
+if not GUIDE_H5.exists():
+    raise FileNotFoundError(
+        "Run 01_prepare_cross_sensor_hr_guide.py first:\n"
+        + str(GUIDE_H5)
+    )
+
+with h5py.File(GUIDE_H5, "r") as f:
+    if "sony_rgb_01" not in f:
+        raise KeyError(
+            "Dataset 'sony_rgb_01' was not found in:\n"
+            + str(GUIDE_H5)
+        )
+
+    img_hr_guide = np.float32(
+        f["sony_rgb_01"][:]
+    )
+
+if img_hr_guide.shape != (1000, 1000, 3):
+    raise ValueError(
+        f"Expected Sony HR guide=(1000,1000,3), got {img_hr_guide.shape}"
+    )
+
+print("=" * 100)
+print("REAL CROSS-SENSOR SONY BGR-ONLY WHOLE-FIELD GRAM HSI-SR")
+print("=" * 100)
+print("Stored HR guide:", img_hr_guide.shape, "[R,G,B]")
+print("Mapper internal order: [B,G,R]")
+print("LR HSI  :", img_lr_hsi.shape)
+print("HR HSI  :", img_hr_hsi.shape)
+print("HR pixels used in ONE global mapper/Gram:", 1000 * 1000)
+print("LR pixels used in ONE global Gram:", 125 * 125)
+print("Plot-by-plot training: NO")
+
+encoder_checkpoint = resolve_checkpoint(
+    ENCODER_CHECKPOINT_NAME
+)
+
+decoder_checkpoint = resolve_checkpoint(
+    DECODER_CHECKPOINT_NAME
+)
+
+encoder = (
+    EncoderLRHSI()
+    .to(device)
+    .float()
+)
+
+decoder = (
+    DecoderHSI()
+    .to(device)
+    .float()
+)
+
+load_module_checkpoint(
+    encoder,
+    encoder_checkpoint,
+    device,
+)
+
+load_module_checkpoint(
+    decoder,
+    decoder_checkpoint,
+    device,
+)
+
+encoder.eval()
+decoder.eval()
+
+for parameter in encoder.parameters():
+    parameter.requires_grad_(False)
+
+for parameter in decoder.parameters():
+    parameter.requires_grad_(False)
+
+print("Frozen encoder/decoder loaded.")
+
+
+input_lr_hsi_raw = torch.tensor(
+    img_lr_hsi.reshape(
+        -1,
+        40,
+    ),
+    dtype=torch.float32,
+)
+
+input_lr_hsi_raw_mean = (
+    input_lr_hsi_raw
+    .mean(
+        0,
+        keepdim=True,
+    )
+)
+
+input_lr_hsi_centered = (
+    input_lr_hsi_raw
+    - input_lr_hsi_raw_mean
+)
+
+input_lr_hsi_var = (
+    input_lr_hsi_centered
+    .to(device)
+)
+
+with torch.no_grad():
+    out_LR_hsi_v = encoder(
+        input_lr_hsi_var
+    )
+
+    out_LR_img_s = get_stick_segments(
+        out_LR_hsi_v
+    ).clamp(
+        1e-8,
+        1.0 - 1e-8,
+    )
+
+    (
+        lr_gram_centered,
+        lr_gram_diagonal,
+    ) = centered_gram(
+        out_LR_img_s
+    )
+
+print(
+    "Global LR abundance shape:",
+    tuple(out_LR_img_s.shape),
+)
+
+
+input_hr_guide_raw = torch.tensor(
+    img_hr_guide.reshape(
+        -1,
+        3,
+    ),
+    dtype=torch.float32,
+)
+
+input_hr_guide_raw_mean = (
+    input_hr_guide_raw.mean(
+        0,
+        keepdim=True,
+    )
+)
+
+input_hr_guide_centered = (
+    input_hr_guide_raw
+    - input_hr_guide_raw_mean
+)
+
+input_hr_guide_var = (
+    input_hr_guide_centered
+    .to(device)
+)
+
+print(
+    "Global HR guide matrix:",
+    tuple(input_hr_guide_var.shape),
+)
+
+print(
+    "HR guide channel means:",
+    input_hr_guide_raw_mean.squeeze().numpy(),
+)
+
+
+input_hr_hsi_raw = torch.tensor(
+    img_hr_hsi.reshape(
+        -1,
+        40,
+    ),
+    dtype=torch.float32,
+)
+
+input_hr_hsi_raw_mean = (
+    input_hr_hsi_raw.mean(
+        0,
+        keepdim=True,
+    )
+)
+
+gt_mean_gpu = (
+    input_hr_hsi_raw_mean
+    .to(device)
+)
+
+
+mapper = (
+    InputToHSIMapper(
+        n_inputs=3,
+        n_outputs=40,
+    )
+    .to(device)
+    .float()
+)
+
+print(
+    "Mapper repeat counts:",
+    mapper.repeat_counts
+    .detach()
+    .cpu()
+    .tolist(),
+)
+
+optimizer = torch.optim.Adam(
+    mapper.parameters(),
+    lr=LEARNING_RATE,
+    weight_decay=WEIGHT_DECAY,
+)
+
+
+best_path = (
+    OUTPUT_ROOT
+    / "best_mapper_unsupervised.pth"
+)
+
+latest_path = (
+    OUTPUT_ROOT
+    / "latest_mapper.pth"
+)
+
+history_path = (
+    OUTPUT_ROOT
+    / "history.csv"
+)
+
+result_path = (
+    OUTPUT_ROOT
+    / "result.json"
+)
+
+diagnostic_path = (
+    OUTPUT_ROOT
+    / "diagnostic_best_hr_metrics.json"
+)
+
+reconstruction_path = (
+    OUTPUT_ROOT
+    / "sony_bgr_only_reconstruction_40band.h5"
+)
+
+
+if (
+    SKIP_COMPLETED
+    and result_path.exists()
+):
+    previous = json.loads(
+        result_path.read_text(
+            encoding="utf-8"
+        )
+    )
+
+    if previous.get("status") == "complete":
+        print("Already complete:")
+        print(result_path)
+        raise SystemExit
+
+
+start_epoch = 0
+
+best_loss = np.inf
+saved_gram_sam = np.inf
+saved_gram_psnr = -np.inf
+saved_epoch = -1
+
+plateau_gram_sam = np.inf
+plateau_epoch = 0
+
+recon_window_reference = None
+recon_window_reference_epoch = None
+recon_relative_change = float("nan")
+recon_stable_windows = 0
+
+diagnostic_best_full_sam = np.inf
+diagnostic_best_plot_sam = np.inf
+diagnostic_best_full_sam_epoch = -1
+diagnostic_best_plot_sam_epoch = -1
+
+
+if (
+    RESUME_INCOMPLETE
+    and latest_path.exists()
+    and not result_path.exists()
+):
+    print("[resume] loading:", latest_path)
+
+    payload = torch.load(
+        latest_path,
+        map_location=device,
+    )
+
+    mapper.load_state_dict(
+        payload["state_dict"]
+    )
+
+    optimizer.load_state_dict(
+        payload["optimizer"]
+    )
+
+    start_epoch = (
+        int(payload["epoch"])
+        + 1
+    )
+
+    best_loss = float(
+        payload.get(
+            "best_loss",
+            np.inf,
+        )
+    )
+
+    saved_gram_sam = float(
+        payload.get(
+            "saved_gram_sam",
+            np.inf,
+        )
+    )
+
+    saved_gram_psnr = float(
+        payload.get(
+            "saved_gram_psnr",
+            -np.inf,
+        )
+    )
+
+    saved_epoch = int(
+        payload.get(
+            "saved_epoch",
+            -1,
+        )
+    )
+
+    plateau_gram_sam = float(
+        payload.get(
+            "plateau_gram_sam",
+            np.inf,
+        )
+    )
+
+    plateau_epoch = int(
+        payload.get(
+            "plateau_epoch",
+            start_epoch,
+        )
+    )
+
+    diagnostic_best_full_sam = float(
+        payload.get(
+            "diagnostic_best_full_sam",
+            np.inf,
+        )
+    )
+
+    diagnostic_best_plot_sam = float(
+        payload.get(
+            "diagnostic_best_plot_sam",
+            np.inf,
+        )
+    )
+
+    diagnostic_best_full_sam_epoch = int(
+        payload.get(
+            "diagnostic_best_full_sam_epoch",
+            -1,
+        )
+    )
+
+    diagnostic_best_plot_sam_epoch = int(
+        payload.get(
+            "diagnostic_best_plot_sam_epoch",
+            -1,
+        )
+    )
+
+    print("[resume] starting epoch:", start_epoch)
+
+
+history_fields = [
+    "epoch",
+    "total_loss",
+    "gram_sam",
+    "gram_psnr",
+    "best_loss",
+    "best_epoch",
+    "recon_SAM_full",
+    "recon_PSNR_full",
+    "recon_ERGAS_full",
+    "recon_RMSE_full",
+    "recon_MAE_full",
+    "recon_SAM_plot",
+    "recon_PSNR_plot",
+    "recon_ERGAS_plot",
+    "recon_RMSE_plot",
+    "recon_MAE_plot",
+    "diagnostic_best_full_sam",
+    "diagnostic_best_full_sam_epoch",
+    "diagnostic_best_plot_sam",
+    "diagnostic_best_plot_sam_epoch",
+    "recon_relative_change",
+    "recon_stable_windows",
+    "reconstruction_l21",
+    "gram_l21",
+    "gram_ergas",
+    "gram_sam_loss",
+    "gram_sam_t",
+    "diag_l21",
+    "diag_sam",
+    "seconds",
+]
+
+
+run_start_time = time.time()
+last_epoch = start_epoch - 1
+
+for epoch in range(
+    start_epoch,
+    MAX_EPOCHS,
+):
+    last_epoch = epoch
+
+    optimizer.zero_grad()
+
+    mapped_hsi = mapper(
+        input_hr_guide_var
+    ).clamp(
+        -1.0 + 1e-8,
+        1.0 - 1e-8,
+    )
+
+    out_HR_v = encoder(
+        mapped_hsi
+    )
+
+    out_HR_s = get_stick_segments(
+        out_HR_v
+    ).clamp(
+        1e-8,
+        1.0 - 1e-8,
+    )
+
+    reconstructed_centered = decoder(
+        out_HR_s
+    ).clamp(
+        -1.0 + 1e-8,
+        1.0 - 1e-8,
+    )
+
+    (
+        hr_gram_centered,
+        hr_gram_diagonal,
+    ) = centered_gram(
+        out_HR_s
+    )
+
+    (
+        loss,
+        loss_parts,
+    ) = compute_original_composite_loss(
+        mapped_hsi,
+        reconstructed_centered,
+        hr_gram_centered,
+        hr_gram_diagonal,
+        lr_gram_centered,
+        lr_gram_diagonal,
+    )
+
+    loss_value = float(
+        loss.detach().item()
+    )
+
+    gram_sam_value = float(
+        loss_parts[
+            "gram_sam"
+        ]
+        .detach()
+        .item()
+    )
+
+    gram_psnr_value = float(
+        psnr_ev_gen(
+            hr_gram_centered + 1e-8,
+            lr_gram_centered + 1e-8,
+        )
+        .detach()
+        .item()
+    )
+
+    if loss_value < best_loss:
+        best_loss = loss_value
+        saved_gram_sam = gram_sam_value
+        saved_gram_psnr = gram_psnr_value
+        saved_epoch = epoch
+
+        atomic_torch_save(
+            {
+                "epoch": saved_epoch,
+                "best_loss": best_loss,
+                "saved_gram_sam": saved_gram_sam,
+                "saved_gram_psnr": saved_gram_psnr,
+                "state_dict": mapper.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "n_inputs": 3,
+                "guide_channels_stored": [
+                    "Sony_R",
+                    "Sony_G",
+                    "Sony_B",
+                ],
+                "guide_channels_mapper_order": [
+                    "Sony_B",
+                    "Sony_G",
+                    "Sony_R",
+                ],
+                "seed": SEED,
+                "selection_metric": "original_composite_loss",
+                "gt_metrics_used_for_selection": False,
+                "global_whole_image_training": True,
+            },
+            best_path,
+        )
+
+        print(
+            "[BEST] loss={} at epoch={}".format(
+                best_loss,
+                saved_epoch,
+            )
+        )
+
+    if not np.isfinite(plateau_gram_sam):
+        plateau_gram_sam = gram_sam_value
+        plateau_epoch = epoch
+
+    elif (
+        gram_sam_value
+        < plateau_gram_sam
+        - SAM_MIN_DECREASE
+    ):
+        plateau_gram_sam = gram_sam_value
+        plateau_epoch = epoch
+
+    evaluate_now = (
+        epoch % EVAL_EVERY == 0
+        or epoch == MAX_EPOCHS - 1
+    )
+
+    recon_change_stop = False
+
+    if evaluate_now:
+        current_reconstruction_eval = (
+            reconstructed_centered.detach()
+            + input_lr_hsi_raw_mean.to(
+                device
+            )
+        ).to(
+            "cpu",
+            dtype=torch.float32,
+        )
+
+        if recon_window_reference is None:
+            recon_window_reference = (
+                current_reconstruction_eval
+            )
+            recon_window_reference_epoch = epoch
+            recon_relative_change = float("nan")
+            recon_stable_windows = 0
+
+        elif (
+            epoch
+            - recon_window_reference_epoch
+            >= RECON_WINDOW_EPOCHS
+        ):
+            diff_norm = torch.linalg.vector_norm(
+                current_reconstruction_eval
+                - recon_window_reference
+            )
+
+            ref_norm = torch.linalg.vector_norm(
