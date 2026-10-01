@@ -1073,3 +1073,290 @@ for epoch in range(
         )
 
     optimizer.step()
+    if (
+        SAVE_LATEST_EVERY > 0
+        and (epoch + 1) % SAVE_LATEST_EVERY == 0
+    ):
+        atomic_torch_save(
+            {
+                "epoch": epoch,
+                "best_loss": best_loss,
+                "saved_gram_sam": saved_gram_sam,
+                "saved_gram_psnr": saved_gram_psnr,
+                "saved_epoch": saved_epoch,
+                "plateau_gram_sam": plateau_gram_sam,
+                "plateau_epoch": plateau_epoch,
+                "diagnostic_best_full_sam": diagnostic_best_full_sam,
+                "diagnostic_best_full_sam_epoch": diagnostic_best_full_sam_epoch,
+                "diagnostic_best_plot_sam": diagnostic_best_plot_sam,
+                "diagnostic_best_plot_sam_epoch": diagnostic_best_plot_sam_epoch,
+                "state_dict": mapper.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "n_inputs": 4,
+                "guide_nir_actual_nm": guide_nir_actual_nm,
+                "seed": SEED,
+                "global_whole_image_training": True,
+            },
+            latest_path,
+        )
+
+    if (
+        SAM_PATIENCE_EPOCHS > 0
+        and (epoch - plateau_epoch) >= SAM_PATIENCE_EPOCHS
+    ):
+        print(
+            "\n[early-stop] Centered abundance Gram-SAM plateau."
+        )
+        break
+
+
+atomic_torch_save(
+    {
+        "epoch": last_epoch,
+        "best_loss": best_loss,
+        "saved_gram_sam": saved_gram_sam,
+        "saved_gram_psnr": saved_gram_psnr,
+        "saved_epoch": saved_epoch,
+        "plateau_gram_sam": plateau_gram_sam,
+        "plateau_epoch": plateau_epoch,
+        "diagnostic_best_full_sam": diagnostic_best_full_sam,
+        "diagnostic_best_full_sam_epoch": diagnostic_best_full_sam_epoch,
+        "diagnostic_best_plot_sam": diagnostic_best_plot_sam,
+        "diagnostic_best_plot_sam_epoch": diagnostic_best_plot_sam_epoch,
+        "state_dict": mapper.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "n_inputs": 4,
+        "guide_nir_actual_nm": guide_nir_actual_nm,
+        "seed": SEED,
+        "global_whole_image_training": True,
+    },
+    latest_path,
+)
+
+
+best_payload = torch.load(
+    best_path,
+    map_location=device,
+)
+
+mapper.load_state_dict(
+    best_payload["state_dict"]
+)
+mapper.eval()
+
+
+with torch.no_grad():
+    mapped_best = mapper(
+        input_hr_guide_var
+    ).clamp(
+        -1.0 + 1e-8,
+        1.0 - 1e-8,
+    )
+
+    abundance_best = get_stick_segments(
+        encoder(mapped_best)
+    ).clamp(
+        1e-8,
+        1.0 - 1e-8,
+    )
+
+    reconstruction_centered_best = decoder(
+        abundance_best
+    ).clamp(
+        -1.0 + 1e-8,
+        1.0 - 1e-8,
+    )
+
+    reconstruction_lr_mean = (
+        reconstruction_centered_best
+        + input_lr_hsi_raw_mean.to(device)
+    )
+
+    reconstruction_lr_mean_np = (
+        reconstruction_lr_mean
+        .detach()
+        .cpu()
+        .numpy()
+        .reshape(1000, 1000, 40)
+        .astype(np.float32)
+    )
+
+    reconstruction_hr_mean = (
+        reconstruction_centered_best
+        + gt_mean_gpu
+    )
+
+    reconstruction_hr_mean_np = (
+        reconstruction_hr_mean
+        .detach()
+        .cpu()
+        .numpy()
+        .reshape(1000, 1000, 40)
+        .astype(np.float32)
+    )
+
+
+metrics_full = evaluate_numpy(
+    img_hr_hsi,
+    reconstruction_hr_mean_np,
+    mask=valid_mask_hr > 0,
+)
+
+metrics_plot = evaluate_numpy(
+    img_hr_hsi,
+    reconstruction_hr_mean_np,
+    mask=(
+        (plot_mask_hr > 0)
+        & (valid_mask_hr > 0)
+    ),
+)
+
+
+if SAVE_RECONSTRUCTION:
+    with h5py.File(
+        reconstruction_path,
+        "w",
+    ) as f:
+        f.create_dataset(
+            "reconstruction_official_lr_mean",
+            data=reconstruction_lr_mean_np,
+            compression="gzip",
+            compression_opts=4,
+        )
+
+        f.create_dataset(
+            "reconstruction_diagnostic_hr_mean",
+            data=reconstruction_hr_mean_np,
+            compression="gzip",
+            compression_opts=4,
+        )
+
+        f.create_dataset(
+            "wavelengths_nm",
+            data=wavelengths,
+        )
+
+        f.create_dataset(
+            "hr_guide",
+            data=img_hr_guide,
+            compression="gzip",
+            compression_opts=4,
+        )
+
+        f.attrs["official_checkpoint"] = "minimum_original_composite_loss"
+        f.attrs["HR_GT_used_for_training"] = False
+        f.attrs["HR_GT_used_for_checkpoint_selection"] = False
+        f.attrs["HR_GT_used_for_stopping"] = False
+        f.attrs["global_whole_image_training"] = True
+        f.attrs["plot_by_plot_training"] = False
+        f.attrs["guide_nir_actual_nm"] = guide_nir_actual_nm
+        f.attrs["rgb_downsample_factor"] = factor
+        f.attrs["rgb_native_height"] = native_h
+        f.attrs["rgb_native_width"] = native_w
+        f.attrs["rgb_downsampling"] = "area"
+        f.attrs["rgb_upsampling"] = "bilinear"
+        f.attrs["hsi_scale_factor_fixed"] = 8
+        f.attrs["best_epoch"] = int(best_payload["epoch"])
+        f.attrs["best_loss"] = float(best_payload["best_loss"])
+
+
+result = {
+    "status": "complete",
+    "experiment": f"rgb_resolution_ablation_x{factor}_cross_sensor_bgr_plus_802",
+    "hr_guide": "Sony_RGB_plus_Mjolnir_NIR",
+    "n_hr_guide_channels": 4,
+    "guide_nir_actual_nm": guide_nir_actual_nm,
+    "rgb_downsample_factor": factor,
+    "rgb_native_resolution": [native_h, native_w],
+    "rgb_downsampling": "area",
+    "rgb_upsampling": "bilinear",
+    "only_rgb_resolution_changed": True,
+    "scale_factor": 8,
+    "hr_shape": list(img_hr_hsi.shape),
+    "lr_shape": list(img_lr_hsi.shape),
+    "best_epoch_unsupervised": int(best_payload["epoch"]),
+    "best_composite_loss": float(best_payload["best_loss"]),
+    "HR_GT_used_for_training": False,
+    "HR_GT_used_for_checkpoint_selection": False,
+    "HR_GT_used_for_stopping": False,
+    "global_whole_image_training": True,
+    "plot_by_plot_training": False,
+
+    "diagnostic_best_full_sam_during_training": {
+        "SAM": diagnostic_best_full_sam,
+        "epoch": diagnostic_best_full_sam_epoch,
+        "used_for_selection": False,
+    },
+
+    "diagnostic_best_plot_sam_during_training": {
+        "SAM": diagnostic_best_plot_sam,
+        "epoch": diagnostic_best_plot_sam_epoch,
+        "used_for_selection": False,
+    },
+
+    "official_checkpoint_diagnostic_full": {
+        "SAM": metrics_full["SAM"],
+        "PSNR": metrics_full["PSNR"],
+        "ERGAS": metrics_full["ERGAS"],
+        "RMSE": metrics_full["RMSE"],
+        "MAE": metrics_full["MAE"],
+    },
+
+    "official_checkpoint_diagnostic_plot": {
+        "SAM": metrics_plot["SAM"],
+        "PSNR": metrics_plot["PSNR"],
+        "ERGAS": metrics_plot["ERGAS"],
+        "RMSE": metrics_plot["RMSE"],
+        "MAE": metrics_plot["MAE"],
+    },
+
+    "official_reconstruction_dataset": "reconstruction_official_lr_mean",
+}
+
+result_path.write_text(
+    json.dumps(result, indent=2),
+    encoding="utf-8",
+)
+
+
+print("\n" + "=" * 100)
+print(f"RGB RESOLUTION x{factor} CROSS-SENSOR GRAM HSI-SR COMPLETE")
+print("=" * 100)
+print("Official unsupervised checkpoint epoch:", best_payload["epoch"])
+print("Official minimum composite loss:", best_payload["best_loss"])
+
+print(
+    "Diagnostic best FULL SAM during training:",
+    diagnostic_best_full_sam,
+    "@",
+    diagnostic_best_full_sam_epoch,
+)
+
+print(
+    "Diagnostic best PLOT SAM during training:",
+    diagnostic_best_plot_sam,
+    "@",
+    diagnostic_best_plot_sam_epoch,
+)
+
+print("\nOfficial checkpoint diagnostic metrics:")
+print(
+    "FULL: SAM={:.4f} PSNR={:.3f} ERGAS={:.4f}".format(
+        metrics_full["SAM"],
+        metrics_full["PSNR"],
+        metrics_full["ERGAS"],
+    )
+)
+
+print(
+    "PLOT: SAM={:.4f} PSNR={:.3f} ERGAS={:.4f}".format(
+        metrics_plot["SAM"],
+        metrics_plot["PSNR"],
+        metrics_plot["ERGAS"],
+    )
+)
+
+print("\nSaved:")
+print(result_path)
+if SAVE_RECONSTRUCTION:
+    print(reconstruction_path)
