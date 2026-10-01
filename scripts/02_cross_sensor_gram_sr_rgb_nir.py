@@ -759,3 +759,356 @@ for parameter in decoder.parameters():
 print("Frozen encoder/decoder loaded.")
 
 
+input_lr_hsi_raw = torch.tensor(
+    img_lr_hsi.reshape(
+        -1,
+        40,
+    ),
+    dtype=torch.float32,
+)
+
+input_lr_hsi_raw_mean = (
+    input_lr_hsi_raw
+    .mean(
+        0,
+        keepdim=True,
+    )
+)
+
+input_lr_hsi_centered = (
+    input_lr_hsi_raw
+    - input_lr_hsi_raw_mean
+)
+
+input_lr_hsi_var = (
+    input_lr_hsi_centered
+    .to(device)
+)
+
+with torch.no_grad():
+    out_LR_hsi_v = encoder(
+        input_lr_hsi_var
+    )
+
+    out_LR_img_s = get_stick_segments(
+        out_LR_hsi_v
+    ).clamp(
+        1e-8,
+        1.0 - 1e-8,
+    )
+
+    (
+        lr_gram_centered,
+        lr_gram_diagonal,
+    ) = centered_gram(
+        out_LR_img_s
+    )
+
+print(
+    "Global LR abundance shape:",
+    tuple(out_LR_img_s.shape),
+)
+
+
+input_hr_guide_raw = torch.tensor(
+    img_hr_guide.reshape(
+        -1,
+        4,
+    ),
+    dtype=torch.float32,
+)
+
+input_hr_guide_raw_mean = (
+    input_hr_guide_raw.mean(
+        0,
+        keepdim=True,
+    )
+)
+
+input_hr_guide_centered = (
+    input_hr_guide_raw
+    - input_hr_guide_raw_mean
+)
+
+input_hr_guide_var = (
+    input_hr_guide_centered
+    .to(device)
+)
+
+print(
+    "Global HR guide matrix:",
+    tuple(input_hr_guide_var.shape),
+)
+
+print(
+    "HR guide channel means:",
+    input_hr_guide_raw_mean.squeeze().numpy(),
+)
+
+
+input_hr_hsi_raw = torch.tensor(
+    img_hr_hsi.reshape(
+        -1,
+        40,
+    ),
+    dtype=torch.float32,
+)
+
+input_hr_hsi_raw_mean = (
+    input_hr_hsi_raw.mean(
+        0,
+        keepdim=True,
+    )
+)
+
+gt_mean_gpu = (
+    input_hr_hsi_raw_mean
+    .to(device)
+)
+
+
+mapper = (
+    InputToHSIMapper(
+        n_inputs=4,
+        n_outputs=40,
+    )
+    .to(device)
+    .float()
+)
+
+print(
+    "Mapper repeat counts:",
+    mapper.repeat_counts
+    .detach()
+    .cpu()
+    .tolist(),
+)
+
+optimizer = torch.optim.Adam(
+    mapper.parameters(),
+    lr=LEARNING_RATE,
+    weight_decay=WEIGHT_DECAY,
+)
+
+
+best_path = (
+    OUTPUT_ROOT
+    / "best_mapper_unsupervised.pth"
+)
+
+latest_path = (
+    OUTPUT_ROOT
+    / "latest_mapper.pth"
+)
+
+history_path = (
+    OUTPUT_ROOT
+    / "history.csv"
+)
+
+result_path = (
+    OUTPUT_ROOT
+    / "result.json"
+)
+
+diagnostic_path = (
+    OUTPUT_ROOT
+    / "diagnostic_best_hr_metrics.json"
+)
+
+reconstruction_path = (
+    OUTPUT_ROOT
+    / "cross_sensor_reconstruction_40band.h5"
+)
+
+
+if (
+    SKIP_COMPLETED
+    and result_path.exists()
+):
+    previous = json.loads(
+        result_path.read_text(
+            encoding="utf-8"
+        )
+    )
+
+    if previous.get("status") == "complete":
+        print("Already complete:")
+        print(result_path)
+        raise SystemExit
+
+
+start_epoch = 0
+
+best_loss = np.inf
+saved_gram_sam = np.inf
+saved_gram_psnr = -np.inf
+saved_epoch = -1
+
+plateau_gram_sam = np.inf
+plateau_epoch = 0
+
+recon_window_reference = None
+recon_window_reference_epoch = None
+recon_relative_change = float("nan")
+recon_stable_windows = 0
+
+diagnostic_best_full_sam = np.inf
+diagnostic_best_plot_sam = np.inf
+diagnostic_best_full_sam_epoch = -1
+diagnostic_best_plot_sam_epoch = -1
+
+
+if (
+    RESUME_INCOMPLETE
+    and latest_path.exists()
+    and not result_path.exists()
+):
+    print("[resume] loading:", latest_path)
+
+    payload = torch.load(
+        latest_path,
+        map_location=device,
+    )
+
+    mapper.load_state_dict(
+        payload["state_dict"]
+    )
+
+    optimizer.load_state_dict(
+        payload["optimizer"]
+    )
+
+    start_epoch = (
+        int(payload["epoch"])
+        + 1
+    )
+
+    best_loss = float(
+        payload.get(
+            "best_loss",
+            np.inf,
+        )
+    )
+
+    saved_gram_sam = float(
+        payload.get(
+            "saved_gram_sam",
+            np.inf,
+        )
+    )
+
+    saved_gram_psnr = float(
+        payload.get(
+            "saved_gram_psnr",
+            -np.inf,
+        )
+    )
+
+    saved_epoch = int(
+        payload.get(
+            "saved_epoch",
+            -1,
+        )
+    )
+
+    plateau_gram_sam = float(
+        payload.get(
+            "plateau_gram_sam",
+            np.inf,
+        )
+    )
+
+    plateau_epoch = int(
+        payload.get(
+            "plateau_epoch",
+            start_epoch,
+        )
+    )
+
+    diagnostic_best_full_sam = float(
+        payload.get(
+            "diagnostic_best_full_sam",
+            np.inf,
+        )
+    )
+
+    diagnostic_best_plot_sam = float(
+        payload.get(
+            "diagnostic_best_plot_sam",
+            np.inf,
+        )
+    )
+
+    diagnostic_best_full_sam_epoch = int(
+        payload.get(
+            "diagnostic_best_full_sam_epoch",
+            -1,
+        )
+    )
+
+    diagnostic_best_plot_sam_epoch = int(
+        payload.get(
+            "diagnostic_best_plot_sam_epoch",
+            -1,
+        )
+    )
+
+    print("[resume] starting epoch:", start_epoch)
+
+
+history_fields = [
+    "epoch",
+    "total_loss",
+    "gram_sam",
+    "gram_psnr",
+    "best_loss",
+    "best_epoch",
+    "recon_SAM_full",
+    "recon_PSNR_full",
+    "recon_ERGAS_full",
+    "recon_RMSE_full",
+    "recon_MAE_full",
+    "recon_SAM_plot",
+    "recon_PSNR_plot",
+    "recon_ERGAS_plot",
+    "recon_RMSE_plot",
+    "recon_MAE_plot",
+    "diagnostic_best_full_sam",
+    "diagnostic_best_full_sam_epoch",
+    "diagnostic_best_plot_sam",
+    "diagnostic_best_plot_sam_epoch",
+    "recon_relative_change",
+    "recon_stable_windows",
+    "reconstruction_l21",
+    "gram_l21",
+    "gram_ergas",
+    "gram_sam_loss",
+    "gram_sam_t",
+    "diag_l21",
+    "diag_sam",
+    "seconds",
+]
+
+
+run_start_time = time.time()
+last_epoch = start_epoch - 1
+
+for epoch in range(
+    start_epoch,
+    MAX_EPOCHS,
+):
+    last_epoch = epoch
+
+    optimizer.zero_grad()
+
+    mapped_hsi = mapper(
+        input_hr_guide_var
+    ).clamp(
+        -1.0 + 1e-8,
+        1.0 - 1e-8,
+    )
+
+    out_HR_v = encoder(
+        mapped_hsi
+    )
