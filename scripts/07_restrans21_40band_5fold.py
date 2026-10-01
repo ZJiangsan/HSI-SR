@@ -11,7 +11,7 @@ closely as possible, with ONLY the required spectral input adaptation:
 
     SimpleViT channels: 200 -> 40
 
-All downstream dimensions remain unchanged because the SimpleViT output stays
+All functional-validation dimensions remain unchanged because the SimpleViT output stays
 800-dimensional.
 
 Historical architecture retained:
@@ -81,7 +81,7 @@ ROOT = Path.home() / "RGB2msi"
 DATA_DIR = (
     ROOT
     / "hyspex_mjolnir1024"
-    / "cross_sensor_downstream_sections"
+    / "cross_sensor_functional_validation_sections"
 )
 
 MATCHED_H5 = DATA_DIR / "matched_sections_40band.h5"
