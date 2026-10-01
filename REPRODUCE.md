@@ -15,7 +15,7 @@ The experiment scripts are numbered in the intended execution order.
 
 4. `scripts/04_rgb_resolution_ablation.py`
    - RGB-resolution ablation
-   - run separately with `--factor 2`, `--factor 4`, and `--factor 8`
+   - run separately with `--factor 2`, `--factor 4`, and `--factor 8`, or use `scripts/04_run_all_rgb_resolution_ablations.py`
    - only Sony RGB spatial resolution changes; the HR 802-nm anchor and LR-HSI remain fixed
 
 5. `scripts/05_analyze_rgb_resolution_ablation.py`
