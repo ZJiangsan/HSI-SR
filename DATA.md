@@ -35,7 +35,7 @@ The reconstruction scripts also reuse the pretrained Mjolnir 40-band encoder/dec
 
 ## Downstream dataset
 
-The final downstream experiment used:
+The final crop-trait prediction experiment used:
 
 - 148 sections
 - 50 parent plots
