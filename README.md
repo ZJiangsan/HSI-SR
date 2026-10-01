@@ -35,6 +35,7 @@ Thus, the NIR-assisted Gram reconstruction not only reconstructs the spectrum ac
 ```text
 HSI_SR/
 ├── README.md
+├── CITATION.cff
 ├── DATA.md
 ├── REPRODUCE.md
 ├── requirements.txt
@@ -43,6 +44,7 @@ HSI_SR/
 │   ├── 02_cross_sensor_gram_sr_rgb_nir.py
 │   ├── 03_cross_sensor_gram_sr_rgb_only.py
 │   ├── 04_rgb_resolution_ablation.py
+│   ├── 04_run_all_rgb_resolution_ablations.py
 │   ├── 05_analyze_rgb_resolution_ablation.py
 │   ├── 06_prepare_downstream_sections_40band.py
 │   ├── 07_restrans21_40band_5fold.py
