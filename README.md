@@ -39,6 +39,14 @@ HSI_SR/
 ├── REPRODUCE.md
 ├── requirements.txt
 ├── scripts/
+│   ├── 01_prepare_cross_sensor_hr_guide.py
+│   ├── 02_cross_sensor_gram_sr_rgb_nir.py
+│   ├── 03_cross_sensor_gram_sr_rgb_only.py
+│   ├── 04_rgb_resolution_ablation.py
+│   ├── 05_analyze_rgb_resolution_ablation.py
+│   ├── 06_prepare_downstream_sections_40band.py
+│   ├── 07_restrans21_40band_5fold.py
+│   └── 08_plot_manuscript_figures.py
 ├── results/
 │   ├── reconstruction/
 │   ├── downstream/
@@ -46,7 +54,7 @@ HSI_SR/
 └── .gitignore
 ```
 
-Large raw imagery, reconstructed HDF5 cubes, model checkpoints, manuscript files, and rendered figures are intentionally excluded from the code repository. The figures can be regenerated from the included compact result summaries using `scripts/08_plot_manuscript_figures.py`.
+Large raw imagery, reconstructed HDF5 cubes, model checkpoints, manuscript files, and rendered figures are intentionally excluded from the code repository. The compact result figures can be regenerated from the included CSV/JSON summaries using `scripts/08_plot_manuscript_figures.py`. The observed-vs-predicted scatterplots require `test_predictions.csv`, which is generated when the final ResTrans21 five-fold experiment is rerun.
 
 ## Installation
 
