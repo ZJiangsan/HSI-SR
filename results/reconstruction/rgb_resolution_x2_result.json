@@ -1,0 +1,58 @@
+{
+  "status": "complete",
+  "experiment": "rgb_resolution_ablation_x2_cross_sensor_bgr_plus_802",
+  "hr_guide": "Sony_RGB_plus_Mjolnir_NIR",
+  "n_hr_guide_channels": 4,
+  "guide_nir_actual_nm": 802.3200073242188,
+  "rgb_downsample_factor": 2,
+  "rgb_native_resolution": [
+    500,
+    500
+  ],
+  "rgb_downsampling": "area",
+  "rgb_upsampling": "bilinear",
+  "only_rgb_resolution_changed": true,
+  "scale_factor": 8,
+  "hr_shape": [
+    1000,
+    1000,
+    40
+  ],
+  "lr_shape": [
+    125,
+    125,
+    40
+  ],
+  "best_epoch_unsupervised": 38530,
+  "best_composite_loss": 32168.83984375,
+  "HR_GT_used_for_training": false,
+  "HR_GT_used_for_checkpoint_selection": false,
+  "HR_GT_used_for_stopping": false,
+  "global_whole_image_training": true,
+  "plot_by_plot_training": false,
+  "diagnostic_best_full_sam_during_training": {
+    "SAM": 2.222852205664173,
+    "epoch": 38400,
+    "used_for_selection": false
+  },
+  "diagnostic_best_plot_sam_during_training": {
+    "SAM": 2.212525242547015,
+    "epoch": 38400,
+    "used_for_selection": false
+  },
+  "official_checkpoint_diagnostic_full": {
+    "SAM": 2.2227809829037244,
+    "PSNR": 36.208561635433725,
+    "ERGAS": 16.660269538677863,
+    "RMSE": 0.020499586324537817,
+    "MAE": 0.01480892780742715
+  },
+  "official_checkpoint_diagnostic_plot": {
+    "SAM": 2.2124547838476643,
+    "PSNR": 36.226415963961124,
+    "ERGAS": 16.56130883719137,
+    "RMSE": 0.02040402600911263,
+    "MAE": 0.014763471620297751
+  },
+  "official_reconstruction_dataset": "reconstruction_official_lr_mean"
+}
