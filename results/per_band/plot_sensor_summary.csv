@@ -1,0 +1,4 @@
+Sensor,Plots,Bands,Mean pixel X (cm),Mean pixel Y (cm),Min width (px),Max width (px),Min height (px),Max height (px),CRS
+RGB,120,3,10.0,10.0,100,100,100,100,EPSG:25832
+Rikola,120,29,10.0,10.0,100,100,100,100,EPSG:32632
+Mjolnir,100,200,10.0,10.0,100,100,100,100,EPSG:25832
