@@ -350,3 +350,403 @@ def evaluate_numpy(gt_hwc, pred_hwc, mask=None):
         "MAE": float(np.abs(gt - pred).mean()),
         "rmse_band": rmse_band,
     }
+def resolve_checkpoint(checkpoint_name):
+    search_dirs = [
+        Path.cwd(),
+        Path.home(),
+        ROOT,
+        ROOT / "hyspex_mjolnir1024",
+    ]
+
+    exact_candidates = []
+
+    for folder in search_dirs:
+        p = folder / checkpoint_name
+        if p.exists():
+            exact_candidates.append(p.resolve())
+
+    exact_candidates = list(dict.fromkeys(exact_candidates))
+
+    if len(exact_candidates) == 1:
+        return exact_candidates[0]
+
+    if len(exact_candidates) > 1:
+        print(
+            "[checkpoint] multiple exact copies; using:",
+            exact_candidates[0],
+        )
+        return exact_candidates[0]
+
+    found = []
+    for folder in search_dirs:
+        if folder.exists():
+            found.extend(folder.glob("**/" + checkpoint_name))
+
+    found = sorted(set(p.resolve() for p in found))
+
+    if len(found) == 1:
+        return found[0]
+
+    raise FileNotFoundError(
+        "\nCould not uniquely resolve checkpoint:\n"
+        + checkpoint_name
+        + "\nCandidates:\n"
+        + "\n".join(str(x) for x in found)
+    )
+
+
+def load_module_checkpoint(module, path, device):
+    checkpoint = torch.load(path, map_location=device)
+    state = checkpoint.get("state_dict", checkpoint)
+    module.load_state_dict(state)
+
+
+def atomic_torch_save(payload, path):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(path.suffix + ".tmp")
+    torch.save(payload, temp)
+    os.replace(temp, path)
+
+
+if not MJOLNIR_H5.exists():
+    raise FileNotFoundError(MJOLNIR_H5)
+
+with h5py.File(MJOLNIR_H5, "r") as f:
+    img_hr_hsi = np.float32(
+        f["hsi_hr"][:1000, :1000, :]
+    )
+    img_lr_hsi = np.float32(
+        f["hsi_lr"][:]
+    )
+    wavelengths = np.float32(
+        f["selected_wavelengths_nm"][:]
+    )
+    plot_mask_hr = np.uint8(
+        f["plot_mask_hr"][:1000, :1000]
+    )
+    valid_mask_hr = np.uint8(
+        f["valid_mask_hr"][:1000, :1000]
+    )
+
+if img_hr_hsi.shape != (1000, 1000, 40):
+    raise ValueError(
+        f"Expected HR HSI=(1000,1000,40), got {img_hr_hsi.shape}"
+    )
+
+if img_lr_hsi.shape != (125, 125, 40):
+    raise ValueError(
+        f"Expected LR HSI=(125,125,40), got {img_lr_hsi.shape}"
+    )
+
+if not GUIDE_H5.exists():
+    raise FileNotFoundError(
+        "Run 01_prepare_cross_sensor_hr_guide.py first:\n"
+        + str(GUIDE_H5)
+    )
+
+with h5py.File(GUIDE_H5, "r") as f:
+    sony_rgb_hr = np.float32(
+        f["sony_rgb_01"][:]
+    )
+    observed_nir = np.float32(
+        f["observed_nir"][:]
+    )
+    guide_nir_actual_nm = float(
+        f.attrs["nir_actual_nm"]
+    )
+
+if sony_rgb_hr.shape != (1000, 1000, 3):
+    raise ValueError(
+        f"Expected Sony RGB=(1000,1000,3), got {sony_rgb_hr.shape}"
+    )
+
+if observed_nir.shape != (1000, 1000, 1):
+    raise ValueError(
+        f"Expected observed NIR=(1000,1000,1), got {observed_nir.shape}"
+    )
+
+factor = int(RGB_DOWNSAMPLE_FACTOR)
+
+rgb_tensor = torch.from_numpy(
+    np.moveaxis(
+        sony_rgb_hr,
+        -1,
+        0,
+    )[None]
+).float()
+
+native_h = 1000 // factor
+native_w = 1000 // factor
+
+rgb_native = F.interpolate(
+    rgb_tensor,
+    size=(native_h, native_w),
+    mode="area",
+)
+
+rgb_used = F.interpolate(
+    rgb_native,
+    size=(1000, 1000),
+    mode="bilinear",
+    align_corners=False,
+)
+
+sony_rgb_used = np.moveaxis(
+    rgb_used[0].cpu().numpy(),
+    0,
+    -1,
+).astype(np.float32)
+
+img_hr_guide = np.concatenate(
+    [
+        sony_rgb_used,
+        observed_nir,
+    ],
+    axis=2,
+).astype(np.float32)
+
+rgb_native_shape = tuple(
+    rgb_native.shape[-2:]
+)
+
+print("=" * 100)
+print("RGB-RESOLUTION ABLATION: WHOLE-FIELD GRAM HSI-SR")
+print("=" * 100)
+print("RGB downsample factor:", factor)
+print("Sony RGB original:", sony_rgb_hr.shape)
+print("Sony RGB native information resolution:", rgb_native_shape)
+print("Sony RGB mapper input after fixed interpolation:", sony_rgb_used.shape)
+print("Observed NIR FIXED:", observed_nir.shape)
+print("LR HSI FIXED:", img_lr_hsi.shape)
+print("HR HSI:", img_hr_hsi.shape)
+print("HSI scale factor FIXED: 8")
+print("NIR guide wavelength:", guide_nir_actual_nm)
+print("Only RGB resolution changes between runs.")
+
+encoder_checkpoint = resolve_checkpoint(
+    ENCODER_CHECKPOINT_NAME
+)
+decoder_checkpoint = resolve_checkpoint(
+    DECODER_CHECKPOINT_NAME
+)
+
+encoder = EncoderLRHSI().to(device).float()
+decoder = DecoderHSI().to(device).float()
+
+load_module_checkpoint(
+    encoder,
+    encoder_checkpoint,
+    device,
+)
+load_module_checkpoint(
+    decoder,
+    decoder_checkpoint,
+    device,
+)
+
+encoder.eval()
+decoder.eval()
+
+for parameter in encoder.parameters():
+    parameter.requires_grad_(False)
+for parameter in decoder.parameters():
+    parameter.requires_grad_(False)
+
+print("Frozen encoder/decoder loaded.")
+
+
+input_lr_hsi_raw = torch.tensor(
+    img_lr_hsi.reshape(-1, 40),
+    dtype=torch.float32,
+)
+input_lr_hsi_raw_mean = input_lr_hsi_raw.mean(
+    0,
+    keepdim=True,
+)
+input_lr_hsi_centered = (
+    input_lr_hsi_raw - input_lr_hsi_raw_mean
+)
+input_lr_hsi_var = input_lr_hsi_centered.to(device)
+
+with torch.no_grad():
+    out_LR_hsi_v = encoder(input_lr_hsi_var)
+    out_LR_img_s = get_stick_segments(
+        out_LR_hsi_v
+    ).clamp(
+        1e-8,
+        1.0 - 1e-8,
+    )
+    (
+        lr_gram_centered,
+        lr_gram_diagonal,
+    ) = centered_gram(out_LR_img_s)
+
+print(
+    "Global LR abundance shape:",
+    tuple(out_LR_img_s.shape),
+)
+
+
+input_hr_guide_raw = torch.tensor(
+    img_hr_guide.reshape(-1, 4),
+    dtype=torch.float32,
+)
+input_hr_guide_raw_mean = input_hr_guide_raw.mean(
+    0,
+    keepdim=True,
+)
+input_hr_guide_centered = (
+    input_hr_guide_raw - input_hr_guide_raw_mean
+)
+input_hr_guide_var = input_hr_guide_centered.to(device)
+
+print(
+    "Global HR guide matrix:",
+    tuple(input_hr_guide_var.shape),
+)
+print(
+    "HR guide channel means:",
+    input_hr_guide_raw_mean.squeeze().numpy(),
+)
+
+
+input_hr_hsi_raw = torch.tensor(
+    img_hr_hsi.reshape(-1, 40),
+    dtype=torch.float32,
+)
+input_hr_hsi_raw_mean = input_hr_hsi_raw.mean(
+    0,
+    keepdim=True,
+)
+gt_mean_gpu = input_hr_hsi_raw_mean.to(device)
+
+
+mapper = InputToHSIMapper(
+    n_inputs=4,
+    n_outputs=40,
+).to(device).float()
+
+print(
+    "Mapper repeat counts:",
+    mapper.repeat_counts.detach().cpu().tolist(),
+)
+
+optimizer = torch.optim.Adam(
+    mapper.parameters(),
+    lr=LEARNING_RATE,
+    weight_decay=WEIGHT_DECAY,
+)
+
+
+best_path = OUTPUT_ROOT / "best_mapper_unsupervised.pth"
+latest_path = OUTPUT_ROOT / "latest_mapper.pth"
+history_path = OUTPUT_ROOT / "history.csv"
+result_path = OUTPUT_ROOT / "result.json"
+diagnostic_path = OUTPUT_ROOT / "diagnostic_best_hr_metrics.json"
+reconstruction_path = (
+    OUTPUT_ROOT
+    / f"sony_bgr_plus_802_rgb_x{factor}_reconstruction_40band.h5"
+)
+
+if (
+    SKIP_COMPLETED
+    and result_path.exists()
+):
+    previous = json.loads(
+        result_path.read_text(encoding="utf-8")
+    )
+    if previous.get("status") == "complete":
+        print("Already complete:")
+        print(result_path)
+        raise SystemExit
+
+
+start_epoch = 0
+best_loss = np.inf
+saved_gram_sam = np.inf
+saved_gram_psnr = -np.inf
+saved_epoch = -1
+plateau_gram_sam = np.inf
+plateau_epoch = 0
+recon_window_reference = None
+recon_window_reference_epoch = None
+recon_relative_change = float("nan")
+recon_stable_windows = 0
+diagnostic_best_full_sam = np.inf
+diagnostic_best_plot_sam = np.inf
+diagnostic_best_full_sam_epoch = -1
+diagnostic_best_plot_sam_epoch = -1
+
+if (
+    RESUME_INCOMPLETE
+    and latest_path.exists()
+    and not result_path.exists()
+):
+    print("[resume] loading:", latest_path)
+    payload = torch.load(
+        latest_path,
+        map_location=device,
+    )
+
+    mapper.load_state_dict(
+        payload["state_dict"]
+    )
+    optimizer.load_state_dict(
+        payload["optimizer"]
+    )
+
+    start_epoch = int(payload["epoch"]) + 1
+    best_loss = float(payload.get("best_loss", np.inf))
+    saved_gram_sam = float(payload.get("saved_gram_sam", np.inf))
+    saved_gram_psnr = float(payload.get("saved_gram_psnr", -np.inf))
+    saved_epoch = int(payload.get("saved_epoch", -1))
+    plateau_gram_sam = float(payload.get("plateau_gram_sam", np.inf))
+    plateau_epoch = int(payload.get("plateau_epoch", start_epoch))
+    diagnostic_best_full_sam = float(
+        payload.get("diagnostic_best_full_sam", np.inf)
+    )
+    diagnostic_best_plot_sam = float(
+        payload.get("diagnostic_best_plot_sam", np.inf)
+    )
+    diagnostic_best_full_sam_epoch = int(
+        payload.get("diagnostic_best_full_sam_epoch", -1)
+    )
+    diagnostic_best_plot_sam_epoch = int(
+        payload.get("diagnostic_best_plot_sam_epoch", -1)
+    )
+    print("[resume] starting epoch:", start_epoch)
+
+
+history_fields = [
+    "epoch",
+    "total_loss",
+    "gram_sam",
+    "gram_psnr",
+    "best_loss",
+    "best_epoch",
+    "recon_SAM_full",
+    "recon_PSNR_full",
+    "recon_ERGAS_full",
+    "recon_RMSE_full",
+    "recon_MAE_full",
+    "recon_SAM_plot",
+    "recon_PSNR_plot",
+    "recon_ERGAS_plot",
+    "recon_RMSE_plot",
+    "recon_MAE_plot",
+    "diagnostic_best_full_sam",
+    "diagnostic_best_full_sam_epoch",
+    "diagnostic_best_plot_sam",
+    "diagnostic_best_plot_sam_epoch",
+    "recon_relative_change",
+    "recon_stable_windows",
+    "reconstruction_l21",
+    "gram_l21",
+    "gram_ergas",
+    "gram_sam_loss",
+    "gram_sam_t",
+    "diag_l21",
+    "diag_sam",
+    "seconds",
+]
