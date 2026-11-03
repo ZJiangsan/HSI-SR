@@ -1,53 +1,31 @@
-# Data and checkpoints
+# Inputs and data availability
 
-Raw hyperspectral/RGB imagery and large reconstructed HDF5 cubes are **not included in this repository**.
+Only research scripts are supplied in this code integration package. **Do not upload raw field imagery, reconstructed image cubes, large trained model checkpoints or project-private data** without the relevant permissions.
 
-The scripts currently expect the project root at:
+## Source data
 
-```text
-~/RGB2msi/
-```
+The field and agronomic measurements are described by Żelazny et al. (2022), *Remote Sensing*, 14, 5977, https://doi.org/10.3390/rs14235977. The independent Sony RGB and Mjolnir hyperspectral products must cover comparable plots/field areas; dense pixelwise cross-sensor registration is not required by the Gram objective.
 
-Key local inputs used by the experiments include:
+## Prepared reconstruction inputs
 
-```text
-~/RGB2msi/
-├── sony_a5100/
-│   └── plots/
-└── hyspex_mjolnir1024/
-    ├── plots/
-    ├── sections/
-    ├── mjolnir_prepared/
-    │   └── mjolnir_field_40band.h5
-    └── ...
-```
+The NIR-only reconstruction expects `mjolnir_field_40band.h5` containing:
 
-The reconstruction scripts also reuse the pretrained Mjolnir 40-band encoder/decoder checkpoints referenced by filename inside the scripts. These model files are not included in the repository package because they were not part of the files available for packaging.
+- `hsi_hr`: prepared full-resolution native-band field cube, approximately `1000 × 1000 × 40`.
+- `hsi_lr`: `125 × 125 × 40` low-resolution HSI.
+- `selected_wavelengths_nm`: 40 native Mjolnir wavelengths, including the 802.320-nm guide (zero-based index 26).
 
-## Important experimental representation
+You also need the corresponding pretrained 40-band Mjolnir encoder and decoder checkpoint files (`.pth`). These weights are **not** distributed in this scripts-only package.
 
-- HR field: `1000 x 1000 x 40`
-- LR-HSI: `125 x 125 x 40`
-- scale factor: `8`
-- wavelengths: `410.731–992.269 nm`
-- RGB guide: independent Sony RGB acquisition
-- NIR anchor: Mjolnir native band near `802.320 nm`
+## Prediction inputs
 
-## Functional-validation dataset
+The final prediction scripts expect a local data directory with:
 
-The final crop-trait prediction experiment used:
+- `matched_sections_40band.h5` containing genuine and reconstructed 40-band sections;
+- `matched_sections_manifest.csv` with section IDs, fertilizer strata and, for NIR-only section extraction, exact `global_y0`, `global_y1`, `global_x0`, `global_x1` columns;
+- `groundtruth_sections_n.csv` with spring-wheat DM, NC, and NU labels.
 
-- 148 sections
-- 50 parent plots
-- section shape: `15 x 100 x 40`
-- sources: genuine Mjolnir, RGB-only reconstruction, RGB+802 reconstruction
+The matched-label selection uses 148 of 150 extracted section entries. Each section has shape `15 × 100 × 40`. Do not independently resize, reorder or rematch the 802-only sections.
 
-The small final result tables needed to reproduce the manuscript plots are included under `results/`.
+## Interpretation
 
-## Encoder–decoder pretraining source
-
-The historical training script is archived as [`scripts/00_pretrain_mjolnir_encoder_decoder_legacy.py`](scripts/00_pretrain_mjolnir_encoder_decoder_legacy.py). It trains the 40-band encoder and decoder on **unlabeled, mean-centered low-resolution Mjolnir HSI from the study field** using L2,1 spectral reconstruction, spectral information divergence, and entropy regularization. This pretraining is **field-specific and transductive** with respect to the later reconstruction evaluation; it must not be interpreted as an external independent-field pretraining set.
-
-The training script is preserved as historical research code, with the original notebook magic removed, source author identifier removed, and the input location made configurable using the `HSI_SR_MJOLNIR_H5` environment variable. It has not been re-run or refactored into a fully standalone training program. The filename suffix `_sam1p09` on the selected checkpoints was added **after** training to identify the achieved SAM result; the historical training script saves checkpoints without that suffix. The checkpoint save helper stores a fixed epoch field of `10000`, which is not reliable evidence of the true optimization step.
-
-**Missing artifacts:** The original pretrained weight files and raw field data remain excluded from the public repository. Consequently, the project cannot be reproduced end-to-end from GitHub alone without the corresponding data and checkpoint files and any legacy setup dependencies.
+The NIR-only and RGB+802 inputs reuse a high-resolution 802.320-nm band from the Mjolnir reference. This is a **reference-derived NIR anchor**, not a third independent field sensor. Dataset-wide scaling in the historical prediction procedure includes observations from validation sections; unsupervised spectral reconstruction uses imagery covering the study field and is transductive.

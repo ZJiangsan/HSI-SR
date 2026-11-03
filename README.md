@@ -1,85 +1,36 @@
-# HSI_SR
+# Registration-Free Cross-Sensor Hyperspectral Reconstruction for Wheat Trait Prediction
 
-## Registration-free cross-sensor hyperspectral super-resolution with functional validation of crop-trait prediction
+Research scripts for registration-free cross-sensor hyperspectral reconstruction from independently acquired Sony RGB and HySpex Mjolnir HSI, with functional validation on spring-wheat dry matter (DM), nitrogen content (NC), and nitrogen uptake (NU).
 
-This repository contains the code and compact result summaries for a field-scale hyperspectral super-resolution study using **independently acquired Sony RGB and HySpex Mjolnir imagery**.
+The underlying abundance-Gram method is **previous work**; this repository documents its application to independent agricultural sensor products and four guide/input representations. The 802.320-nm high-resolution observation was extracted from the Mjolnir reference, **not collected with a third camera**. Reconstruction uses comparable field/plot support but does not impose pixelwise Sony–Mjolnir registration.
 
-The central idea is to remove the need for pixelwise cross-sensor registration by matching the low- and high-resolution observations through a **permutation-invariant abundance Gram matrix**. The field experiment reconstructs a 40-band HySpex Mjolnir HSI spanning approximately 411–992 nm from a spectrally complete LR-HSI and high-resolution guidance.
+## Scripts
 
-The main comparison is:
+| Directory | Task |
+|---|---|
+| `scripts/00_...` through `scripts/06_...` | Original data preparation, pretrained spectral decomposition, RGB+802 and RGB-only reconstruction, RGB resolution ablation, and matched-section preparation |
+| `scripts/nir802_reconstruction/` | Reference-derived native 802.320-nm guide: 40-band Gram reconstruction and spectral evaluation |
+| `scripts/restrans_dual15/` | Genuine-HSI, RGB-only and RGB+802 ResTrans21 prediction: 3 sources × 5 folds, dual R² checkpoint tracks |
+| `scripts/nir802_prediction/` | Exact manifest-based extraction, five additional ResTrans21 folds for 802-only, and frozen genuine-HSI checkpoint transfer |
+| `scripts/08_plot_manuscript_figures.py` | Existing plotting utilities; inspect expected input summaries before running |
 
-- **Sony RGB only**
-- **Sony RGB + one Mjolnir NIR anchor at 802.320 nm**
+The legacy `scripts/07_restrans21_40band_5fold.py` belongs to an earlier development protocol and **must not** be used to reproduce the final submitted manuscript's 20,000-epoch experiments. Use the new `restrans_dual15/` and `nir802_prediction/` scripts instead.
 
-The Sony RGB observations are acquired independently from the hyperspectral sensor. The 802-nm anchor is a native Mjolnir band, so the RGB+802 guide is a heterogeneous two-sensor guide rather than a fully independent four-channel RGB-NIR camera.
+## Final prediction protocol
 
-## Main results
+- Inputs: genuine 40-band HSI, RGB-only reconstruction, RGB+802 reconstruction and 802-only reconstruction.
+- Matched labels: 148 wheat sections, each `15 × 100 × 40`.
+- Five fertilizer-stratified, section-level folds: `StratifiedKFold(n_splits=5, shuffle=True, random_state=3)`; identical folds across representations.
+- 20,000 epochs per independently initialized model (20 training runs across four representations), initial learning rate `5e-5`, weight decay `1e-4`, seed 42, Adam recreated each epoch.
+- Training records a historical reversed-argument R² track and a conventional R² checkpoint-selection track. Historical R² also governs learning-rate scheduling. **For reported conventional selection, use `standard_best_*.pth` and `standard_selected_fold_metrics.csv`.** Both selection tracks share the same training trajectory.
+- Historical normalization uses each representation's *full-dataset* maximum and full-dataset target min–max scaling. Validation sections contribute to these scalers; report these as validation-selected, field-specific results, not independent external test results.
 
-| Guide | SAM ↓ | PSNR ↑ | RMSE ↓ |
-|---|---:|---:|---:|
-| Sony RGB | 4.997° | 26.29 dB | 0.0701 |
-| Sony RGB + 802 nm | **2.301°** | **35.65 dB** | **0.0227** |
+## Requirements and data
 
-The benefit is not limited to image-reconstruction metrics. A ResTrans21 predictor trained **only on genuine Mjolnir HSI** was frozen and applied unchanged to the reconstructed HSI.
+Python, PyTorch (CUDA recommended), `vit-pytorch`, `numpy`, `pandas`, `h5py`, `scikit-learn`, and other dependencies from [`requirements.txt`](requirements.txt). Raw image cubes, large intermediate reconstructions and model weights are not included. See [`DATA.md`](DATA.md) and [`REPRODUCE.md`](REPRODUCE.md) for expected input files and commands.
 
-| Input to genuine-HSI model | DM R² | NC R² | NU R² |
-|---|---:|---:|---:|
-| Genuine HSI | 0.360 | 0.421 | 0.592 |
-| RGB + 802 reconstruction | 0.273 | 0.179 | **0.585** |
-| RGB-only reconstruction | -3.060 | -1.096 | -3.439 |
-
-Thus, the NIR-assisted Gram reconstruction not only reconstructs the spectrum accurately but also preserves substantial predictive information, with nitrogen-uptake performance nearly unchanged.
-
-## Repository structure
-
-```text
-HSI_SR/
-├── README.md
-├── CITATION.cff
-├── DATA.md
-├── REPRODUCE.md
-├── requirements.txt
-├── scripts/
-│   ├── 01_prepare_cross_sensor_hr_guide.py
-│   ├── 02_cross_sensor_gram_sr_rgb_nir.py
-│   ├── 03_cross_sensor_gram_sr_rgb_only.py
-│   ├── 04_rgb_resolution_ablation.py
-│   ├── 04_run_all_rgb_resolution_ablations.py
-│   ├── 05_analyze_rgb_resolution_ablation.py
-│   ├── 06_prepare_trait_prediction_sections_40band.py
-│   ├── 07_restrans21_40band_5fold.py
-│   └── 08_plot_manuscript_figures.py
-├── results/
-│   ├── reconstruction/
-│   ├── functional-validation/
-│   └── per_band/
-└── .gitignore
-```
-
-Large raw imagery, reconstructed HDF5 cubes, model checkpoints, manuscript files, and rendered figures are intentionally excluded from the code repository. The compact result figures can be regenerated from the included CSV/JSON summaries using `scripts/08_plot_manuscript_figures.py`. The observed-vs-predicted scatterplots require `test_predictions.csv`, which is generated when the final ResTrans21 five-fold experiment is rerun.
-
-## Installation
-
-```bash
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-A CUDA-enabled PyTorch installation is recommended for reconstruction and ResTrans21 training.
-
-## Data
-
-Large raw imagery, reconstructed HDF5 cubes, and model checkpoint files are intentionally excluded from Git. See [`DATA.md`](DATA.md) for the expected local data layout.
-
-## Reproduction
-
-See [`REPRODUCE.md`](REPRODUCE.md) for the experiment order and the exact final trait-prediction protocol used in the manuscript.
-
-## Methodological note
-
-“Registration-free” means that the abundance-Gram optimization does **not require pixelwise RGB–HSI correspondence**. The observations must still represent the same field / scene support so that their global material distributions are comparable.
+This code is adapted to the original Trinity experimental environment. Python script syntax and Slurm launcher syntax were checked during release preparation. **The package was not end-to-end rerun on the original HPC dataset.**
 
 ## Citation
 
-A formal citation entry will be added after manuscript publication.
+Cite the associated manuscript once published, and the foundational abundance-Gram work where appropriate. The study's agricultural field and trait measurement provenance is documented in Żelazny et al. (2022), *Remote Sensing*, 14, 5977, doi:10.3390/rs14235977.
